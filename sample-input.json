@@ -1,0 +1,23 @@
+{
+  "urls": [
+    {
+      "url": "https://aws.amazon.com"
+    },
+    {
+      "url": "https://www.google.com"
+    },
+    {
+      "url": "https://github.com"
+    },
+    {
+      "url": "https://stackoverflow.com"
+    },
+    {
+      "url": "https://reddit.com"
+    },
+    {
+      "url": "https://this-domain-does-not-exist-12345.com",
+      "comment": "This will fail with DNS error"
+    }
+  ]
+}
