@@ -2,17 +2,105 @@
 
 A serverless application that checks the health of multiple URLs in parallel using AWS Step Functions and Lambda. Perfect for monitoring website availability and API endpoints.
 
-## Architecture
-
-
-
 ## Features
 
-- Parallel Processing: Check up to 10 URLs simultaneously
+- Parallel Processing: Check up to 5 URLs simultaneously
 - Error Handling: Automatic retries with exponential backoff
 - Alerting: Email notifications when URLs are down
 - Detailed Metrics: Response time, status codes, timestamps
 - Serverless: No servers to manage, pay only for what you use
+
+## Architecture
+![architecture.png](architecture.png)
+
+## Project Structure
+
+```
+url-health-checker/
+├── src/
+│   ├── check_url.py              # Lambda: Checks individual URL health
+│   └── check_health_status.py    # Lambda: Aggregates health results
+├── statemachine/
+│   └── state-machine.json         # Step Functions workflow definition
+├── template.yaml                  # SAM infrastructure template
+├── sample-input.json              # Example input for testing
+├── samconfig.toml                 # SAM deployment configuration
+├── .gitignore                     # Git ignore patterns
+└── README.md                      # This file
+```
+
+## Component Overview
+
+### Lambda Functions
+
+**`src/check_url.py`** - URL Health Checker
+- Makes HTTP/HTTPS requests to individual URLs
+- Measures response time in milliseconds
+- Returns structured health status (healthy/unhealthy)
+- Handles HTTP errors, timeouts, and network failures
+- Configurable timeout per URL (default: 10 seconds)
+
+**`src/check_health_status.py`** - Health Status Aggregator
+- Receives array of health check results from Map state
+- Determines if any URLs are unhealthy
+- Returns boolean flag for conditional alerting
+- Used by Step Functions Choice state
+
+### Step Functions State Machine
+
+**`statemachine/state-machine.json`** - Workflow Definition
+
+The state machine orchestrates the entire health checking process:
+
+1. **CheckURLs (Map State)**
+   - Runs URL checks in parallel (max 5 concurrent)
+   - Invokes `check_url` Lambda for each URL
+   - Includes retry logic with exponential backoff
+   - Catches and handles Lambda errors gracefully
+
+2. **AggregateResults (Task State)**
+   - Invokes `check_health_status` Lambda
+   - Determines if any URLs failed
+   - Passes results to next state
+
+3. **AddSummary (Pass State)**
+   - Adds metadata (execution ID, timestamp)
+   - Calculates total URLs checked
+   - Prepares data for conditional logic
+
+4. **CheckIfAnyUnhealthy (Choice State)**
+   - Branches based on health status
+   - Routes to alert if unhealthy URLs found
+   - Routes to success if all healthy
+
+5. **SendAlert (Task State)**
+   - Publishes message to SNS topic
+   - Sends email with execution details
+   - Includes list of failed URLs
+
+6. **AllHealthy / Complete (Success States)**
+   - Terminal states for workflow completion
+
+
+### Infrastructure
+
+**`template.yaml`** - SAM Template
+
+Defines all AWS resources:
+
+- **Lambda Functions**: Both health checker and aggregator
+- **Step Functions State Machine**: Workflow orchestration
+- **SNS Topic**: Email notifications with subscription
+- **IAM Roles**: Least privilege permissions for Step Functions
+- **CloudWatch Logs**: Execution logging (7-day retention)
+- **Parameters**: Configurable notification email
+- **Outputs**: Resource ARNs and execution commands
+
+**Key Configurations:**
+- Python 3.12 runtime for both Lambdas
+- DefinitionSubstitutions for ARN injection
+- DependsOn for proper resource ordering
+- Parameterized email for flexibility
 
 ## Prerequisites
 
@@ -33,6 +121,7 @@ mkdir src statemachine
 ### 2. Deploy
 
 ```bash
+# Use the --use-container flag if you encounter and dependency errors. Note that docker desktop must be running for this to work. 
 sam build
 
 sam deploy --guided
@@ -187,14 +276,6 @@ aws logs tail /aws/stepfunctions/url-health-checker --follow
 ```bash
 sam delete
 ```
-
-## Contributing
-
-Feel free to submit issues and enhancement requests!
-
-## License
-
-MIT License - feel free to use this in your projects.
 
 ## Learn More
 
