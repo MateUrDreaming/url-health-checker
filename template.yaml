@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: URL Health Checker with AWS Step Functions
+
+Parameters:
+  NotificationEmail:
+    Type: String
+    Description: Email address to receive health check alerts
+    Default: your-email@example.com
+
+Resources:
+  # Lambda function to check URL health
+  CheckUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: url-health-checker
+      CodeUri: src/
+      Handler: check_url.lambda_handler
+      Runtime: python3.12
+      Timeout: 15
+      MemorySize: 128
+      Description: Checks the health of a single URL
+
+  CheckHealthStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: url-health-status-checker
+      CodeUri: src/
+      Handler: check_health_status.lambda_handler
+      Runtime: python3.12
+      Timeout: 5
+      MemorySize: 128
+      Description: Checks if any URLs are unhealthy
+
+  # SNS Topic for alerts
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: url-health-alerts
+      DisplayName: URL Health Check Alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref NotificationEmail
+
+  # IAM Role for Step Functions
+  StepFunctionsExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Policies:
+        - PolicyName: StepFunctionsExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt CheckUrlFunction.Arn
+                  - !GetAtt CheckHealthStatusFunction.Arn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref AlertTopic
+
+  # Step Functions State Machine
+  UrlHealthCheckerStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: url-health-checker
+      DefinitionUri: statemachine/state-machine.json
+      DefinitionSubstitutions:
+        CheckUrlLambdaArn: !GetAtt CheckUrlFunction.Arn
+        CheckHealthStatusLambdaArn: !GetAtt CheckHealthStatusFunction.Arn
+        SNSTopicArn: !Ref AlertTopic
+      Role: !GetAtt StepFunctionsExecutionRole.Arn
+      Logging:
+        Level: ALL
+        IncludeExecutionData: true
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+    DependsOn:
+      - CheckUrlFunction
+      - CheckHealthStatusFunction
+      - AlertTopic
+
+  # CloudWatch Log Group for Step Functions
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/stepfunctions/url-health-checker
+      RetentionInDays: 7
+
+Outputs:
+  StateMachineArn:
+    Description: ARN of the Step Functions state machine
+    Value: !Ref UrlHealthCheckerStateMachine
+
+  CheckUrlFunctionArn:
+    Description: ARN of the URL checker Lambda function
+    Value: !GetAtt CheckUrlFunction.Arn
+
+  SNSTopicArn:
+    Description: ARN of the SNS alert topic
+    Value: !Ref AlertTopic
+
+  ExecutionCommand:
+    Description: Command to execute the state machine
+    Value: !Sub |
+      aws stepfunctions start-execution \
+        --state-machine-arn ${UrlHealthCheckerStateMachine} \
+        --input '{"urls":[{"url":"https://aws.amazon.com"},{"url":"https://google.com"},{"url":"https://github.com"}]}'
