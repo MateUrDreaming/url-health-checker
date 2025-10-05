@@ -1,0 +1,110 @@
+{
+  "Comment": "Parallel URL Health Checker - Checks multiple URLs concurrently",
+  "StartAt": "CheckURLs",
+  "States": {
+    "CheckURLs": {
+      "Type": "Map",
+      "ItemsPath": "$.urls",
+      "MaxConcurrency": 5,
+      "Iterator": {
+        "StartAt": "CheckSingleURL",
+        "States": {
+          "CheckSingleURL": {
+            "Type": "Task",
+            "Resource": "${CheckUrlLambdaArn}",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Next": "HandleError",
+                "ResultPath": "$.error_info"
+              }
+            ],
+            "End": true
+          },
+          "HandleError": {
+            "Type": "Pass",
+            "Parameters": {
+              "url.$": "$.url",
+              "status": "unhealthy",
+              "error": "Lambda execution failed",
+              "error_details.$": "$.error_info"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.results",
+      "Next": "AggregateResults"
+    },
+    "AggregateResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${CheckHealthStatusLambdaArn}",
+        "Payload": {
+          "results.$": "$.results"
+        }
+      },
+      "ResultPath": "$.health_check",
+      "Next": "AddSummary"
+    },
+    "AddSummary": {
+      "Type": "Pass",
+      "Parameters": {
+        "total_urls.$": "States.ArrayLength($.results)",
+        "results.$": "$.results",
+        "has_unhealthy.$": "$.health_check.Payload.has_unhealthy",
+        "summary": {
+          "execution_time.$": "$$.State.EnteredTime",
+          "execution_id.$": "$$.Execution.Name"
+        }
+      },
+      "Next": "CheckIfAnyUnhealthy"
+    },
+    "CheckIfAnyUnhealthy": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.has_unhealthy",
+          "BooleanEquals": true,
+          "Next": "SendAlert"
+        }
+      ],
+      "Default": "AllHealthy"
+    },
+    "SendAlert": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${SNSTopicArn}",
+        "Subject": "URL Health Check Alert - Some URLs are Down",
+        "Message.$": "States.Format('Health check completed.\n\nTotal URLs checked: {}\n\nUnhealthy URLs detected! Check the execution details.\n\nExecution ID: {}\n\nResults:\n{}', $.total_urls, $.summary.execution_id, States.JsonToString($.results))"
+      },
+      "ResultPath": "$.notification",
+      "Next": "Complete"
+    },
+    "AllHealthy": {
+      "Type": "Pass",
+      "Result": {
+        "message": "All URLs are healthy!"
+      },
+      "ResultPath": "$.health_status",
+      "Next": "Complete"
+    },
+    "Complete": {
+      "Type": "Succeed"
+    }
+  }
+}
